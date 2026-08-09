@@ -2068,6 +2068,51 @@ function startHeartbeat() {
   setInterval(beat, 30000);
 }
 
+// ── PUSH NOTIFICATIONS — real OS notifications that fire even when the
+// phone is asleep or the app is closed. In-page banners (showLive/
+// addBcHist) only work while this tab is open and visible; this is what
+// covers the rest of the time. ──────────────────────────────────────
+function urlBase64ToUint8Array(base64String) {
+  var padding = '='.repeat((4 - base64String.length % 4) % 4);
+  var base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  var rawData = atob(base64);
+  var outputArray = new Uint8Array(rawData.length);
+  for (var i = 0; i < rawData.length; i++) outputArray[i] = rawData.charCodeAt(i);
+  return outputArray;
+}
+
+function initPushSubscription() {
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+  if (!currentUser || !currentUser.uniqueKey) return;
+  if (Notification.permission === 'denied') return;
+
+  navigator.serviceWorker.ready.then(function(reg){
+    return Notification.requestPermission().then(function(perm){
+      if (perm !== 'granted') return;
+      return reg.pushManager.getSubscription().then(function(existing){
+        if (existing) return existing;
+        return fetch('/api/push-vapid-key').then(function(r){ return r.json(); }).then(function(d){
+          if (!d.ok) throw new Error(d.error || 'No VAPID key configured');
+          return reg.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: urlBase64ToUint8Array(d.publicKey),
+          });
+        });
+      });
+    }).then(function(sub){
+      if (!sub) return;
+      var projId = getProjectId(); if (!projId) return;
+      fetch('/api/push-subscribe', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          projectId: projId, uniqueKey: currentUser.uniqueKey, dept: currentUser.dept || '',
+          subscription: sub.toJSON(),
+        }),
+      }).catch(function(){});
+    });
+  }).catch(function(e){ console.warn('Push subscription failed:', e.message); });
+}
+
 var _realtimeChannel = null;
 function startRealtimeBroadcast() {
   var projId = getProjectId(); if (!projId) return;
@@ -2216,6 +2261,7 @@ function launchAppFromSession(session) {
     startProjectPolling();
     startHeartbeat();
     startRealtimeBroadcast();
+    initPushSubscription();
   });
 }
 
@@ -3132,8 +3178,8 @@ function setTalentStage(i,stage){
   talentList[i].onset=(stage==='on_set');
   if(stage==='on_set'){showOnsetOverlay(talentList[i].name+' is on set!<br>All departments prepare now!');addBcHist('🎬 On Set: '+talentList[i].name,'#22c55e','On Set');bcCount++;document.getElementById('bc-n').textContent=bcCount;showLive('🎬 '+talentList[i].name+' — On Set','#22c55e','rgba(34,197,94,.08)','#4ade80');if(navigator.vibrate)navigator.vibrate([200,100,200]);}
   if(stage==='off_set'){var cfg=DEPT_NOTIF_CFG['Talent Manager'];showDeptNotif('All Depts','⏸','Off Set',talentList[i].name+' has left the set',cfg);addBcHist('⏸ Off Set: '+talentList[i].name,'#60a5fa','Off Set');bcCount++;document.getElementById('bc-n').textContent=bcCount;}
-  if(stage==='in_makeup'){var cfg2=DEPT_NOTIF_CFG['Makeup'];showDeptNotif('Makeup',cfg2.icon,'Talent in Makeup',talentList[i].name+' is now in makeup',cfg2);}
-  if(stage==='in_wardrobe'){var cfg3=DEPT_NOTIF_CFG['Wardrobe'];showDeptNotif('Wardrobe',cfg3.icon,'Talent in Wardrobe',talentList[i].name+' is now in wardrobe',cfg3);}
+  if(stage==='in_makeup'){var cfg2=DEPT_NOTIF_CFG['Makeup'];showDeptNotif('Makeup',cfg2.icon,'Talent in Makeup',talentList[i].name+' is now in makeup',cfg2);dbSave('broadcasts',{message:talentList[i].name+' is now in makeup',dot_color:cfg2.color,tag:'Dept',target_dept:'Makeup',sent_by:currentUser?currentUser.name:''},'POST');}
+  if(stage==='in_wardrobe'){var cfg3=DEPT_NOTIF_CFG['Wardrobe'];showDeptNotif('Wardrobe',cfg3.icon,'Talent in Wardrobe',talentList[i].name+' is now in wardrobe',cfg3);dbSave('broadcasts',{message:talentList[i].name+' is now in wardrobe',dot_color:cfg3.color,tag:'Dept',target_dept:'Wardrobe',sent_by:currentUser?currentUser.name:''},'POST');}
   if(stage==='wrapped'){showWrappedOverlay(talentList[i].name);}
   renderTalentList();updateDash();renderArtists();
 }
@@ -3347,6 +3393,7 @@ function adSig(dept,type){
     renderDeptList('makeup');
     document.getElementById('mu-sent').textContent='Sent: Change makeup · '+new Date().toLocaleTimeString();
     var cfg=DEPT_NOTIF_CFG['Makeup'];showDeptNotif('Makeup',cfg.icon,'Change Makeup','Please proceed to makeup area immediately',cfg);
+    dbSave('broadcasts',{message:'Change Makeup — please proceed to makeup area immediately',dot_color:cfg.color,tag:'Dept',target_dept:'Makeup',sent_by:currentUser?currentUser.name:''},'POST');
     if(navigator.vibrate)navigator.vibrate([150,80,150]);
   }
   if(dept==='wardrobe'){
@@ -3354,6 +3401,7 @@ function adSig(dept,type){
     renderDeptList('wardrobe');
     document.getElementById('wd-sent').textContent='Sent: Change wardrobe · '+new Date().toLocaleTimeString();
     var cfg2=DEPT_NOTIF_CFG['Wardrobe'];showDeptNotif('Wardrobe',cfg2.icon,'Change Wardrobe','Please prepare wardrobe for next scene',cfg2);
+    dbSave('broadcasts',{message:'Change Wardrobe — please prepare wardrobe for next scene',dot_color:cfg2.color,tag:'Dept',target_dept:'Wardrobe',sent_by:currentUser?currentUser.name:''},'POST');
     if(navigator.vibrate)navigator.vibrate([150,80,150]);
   }
 }

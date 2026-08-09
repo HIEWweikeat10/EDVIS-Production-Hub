@@ -4,6 +4,7 @@
 // Generic write used by every module: scenes, talent, dept_status, meals,
 // broadcasts, reports, camera_log, production_history, crew_members.
 const { getEnv, json, err } = require('./_db')
+const { sendPushForBroadcast } = require('./_push')
 
 async function dbFetch(url, opts, ms = 15000) {
   const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), ms)
@@ -57,6 +58,16 @@ module.exports = async function handler(req, res) {
     }
     let row = null
     if (text && text !== 'null') { try { const rows = JSON.parse(text); row = Array.isArray(rows) ? rows[0] : rows } catch {} }
+
+    if (path === 'broadcasts' && meth === 'POST' && row) {
+      await sendPushForBroadcast(env, row.project_id, row.target_dept, {
+        title: 'AD Command' + (row.tag ? ' — ' + row.tag : ''),
+        body: row.message,
+        tag: row.tag || 'broadcast',
+        url: '/',
+      }).catch((e) => console.error('push fan-out failed:', e.message))
+    }
+
     json(res, { ok: true, row: row || null })
   } catch (e) {
     err(res, e.message)
