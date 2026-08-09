@@ -2091,24 +2091,26 @@ function initPushSubscription() {
       if (perm !== 'granted') return;
       return reg.pushManager.getSubscription().then(function(existing){
         if (existing) return existing;
-        return fetch('/api/push-vapid-key').then(function(r){ return r.json(); }).then(function(d){
-          if (!d.ok) throw new Error(d.error || 'No VAPID key configured');
+        // Reuses /api/realtime-config (which already returns Supabase config)
+        // rather than a dedicated endpoint, to stay under Vercel Hobby's
+        // 12-serverless-function-per-deployment cap.
+        return fetch('/api/realtime-config').then(function(r){ return r.json(); }).then(function(d){
+          if (!d.ok || !d.vapidPublicKey) throw new Error('No VAPID key configured');
           return reg.pushManager.subscribe({
             userVisibleOnly: true,
-            applicationServerKey: urlBase64ToUint8Array(d.publicKey),
+            applicationServerKey: urlBase64ToUint8Array(d.vapidPublicKey),
           });
         });
       });
     }).then(function(sub){
       if (!sub) return;
-      var projId = getProjectId(); if (!projId) return;
-      fetch('/api/push-subscribe', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          projectId: projId, uniqueKey: currentUser.uniqueKey, dept: currentUser.dept || '',
-          subscription: sub.toJSON(),
-        }),
-      }).catch(function(){});
+      var s = sub.toJSON();
+      // Reuses the generic /api/save UPSERT path rather than a dedicated
+      // endpoint, for the same function-count reason as above.
+      dbSave('push_subscriptions', {
+        unique_key: currentUser.uniqueKey, dept: currentUser.dept || '',
+        endpoint: s.endpoint, p256dh: s.keys.p256dh, auth: s.keys.auth,
+      }, 'UPSERT', null, null, 'endpoint');
     });
   }).catch(function(e){ console.warn('Push subscription failed:', e.message); });
 }
